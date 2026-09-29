@@ -1,0 +1,87 @@
+name: Notify Discord of pull requests
+
+# Reusable workflow: posts pull request events to the Discord channel behind
+# the DISCORD_WEBHOOK_URL secret. Callers run it from a pull_request_target
+# event and pass the secret with "secrets: inherit".
+
+on:
+  workflow_call:
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: true
+
+permissions: {}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Post pull request event
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR: ${{ toJSON(github.event.pull_request) }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "::error::DISCORD_WEBHOOK_URL secret is not configured."
+            exit 1
+          fi
+
+          payload=$(jq -n \
+            --arg action "$EVENT_ACTION" \
+            --argjson pr "$PR" \
+            --arg repo "$REPOSITORY" \
+            --arg owner "$OWNER" \
+            --arg now "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
+              ($pr.merged // false) as $merged
+              | ($pr.draft // false) as $draft
+              | (if $action == "opened" and $draft then "opened as draft"
+                 elif $action == "opened" then "opened"
+                 elif $action == "reopened" then "reopened"
+                 elif $action == "ready_for_review" then "ready for review"
+                 elif $action == "closed" and $merged then "merged"
+                 elif $action == "closed" then "closed"
+                 else $action end) as $verb
+              | (if $merged then 10711543
+                 elif $action == "opened" then 3055683
+                 elif $action == "reopened" then 13801762
+                 elif $action == "ready_for_review" then 5809919
+                 else 7239297 end) as $color
+              | (if ($action == "opened" or $action == "reopened" or $action == "ready_for_review") then
+                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
+                   + "\n+" + ($pr.additions | tostring) + " \u2212" + ($pr.deletions | tostring)
+                   + " \u00b7 " + ($pr.changed_files | tostring)
+                   + (if $pr.changed_files == 1 then " file changed" else " files changed" end)
+                 elif $merged then
+                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
+                   + "\nmerged by " + ($pr.merged_by.login // $pr.user.login)
+                 else
+                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
+                 end) as $description
+              | {
+                  username: $owner,
+                  avatar_url: ("https://github.com/" + $owner + ".png"),
+                  allowed_mentions: { parse: [] },
+                  embeds: [
+                    ({ author: ({ name: ("PR #" + ($pr.number | tostring) + " \u00b7 " + $verb) }
+                                + (if $pr.user.avatar_url then { icon_url: $pr.user.avatar_url } else {} end)),
+                       title: ($pr.title | .[0:250]),
+                       url: $pr.html_url,
+                       description: $description,
+                       color: $color,
+                       footer: { text: $repo },
+                       timestamp: $now })
+                  ]
+                }')
+
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-delay 2 \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"
