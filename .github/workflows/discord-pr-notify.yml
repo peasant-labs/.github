@@ -1,9 +1,10 @@
 name: Notify Discord of pull requests
 
 # Reusable workflow: posts pull request events to the Discord channel behind
-# the DISCORD_WEBHOOK_URL secret. Messages appear under the actor's name and
-# avatar, in the style of a chat relay bot. Callers run it from a
-# pull_request_target event and pass the secret with "secrets: inherit".
+# the DISCORD_WEBHOOK_URL secret. Messages are attributed to the application
+# behind the webhook (name + APP badge), with the actor in the embed author
+# line. Callers run it from a pull_request_target event and pass the secret
+# with "secrets: inherit".
 
 on:
   workflow_call:
@@ -60,13 +61,13 @@ jobs:
               def oneline: gsub("[\n\r\t]+"; " ");
               ($pr.merged // false) as $merged
               | ($pr.draft // false) as $draft
-              | (if $action == "opened" and $draft then "opened draft pull request"
-                 elif $action == "opened" then "opened pull request"
-                 elif $action == "reopened" then "reopened pull request"
-                 elif $action == "ready_for_review" then "marked pull request"
-                 elif $action == "closed" and $merged then "merged pull request"
-                 elif $action == "closed" then "closed pull request"
-                 else ($action + " pull request") end) as $verb
+              | (if $action == "opened" and $draft then "opened as draft"
+                 elif $action == "opened" then "opened"
+                 elif $action == "reopened" then "reopened"
+                 elif $action == "ready_for_review" then "marked"
+                 elif $action == "closed" and $merged then "merged"
+                 elif $action == "closed" then "closed"
+                 else $action end) as $verb
               | (if $action == "ready_for_review" then " as ready for review" else "" end) as $tail
               | (if $name == "" then ($sender | oneline | esc)
                  else (($name | oneline | esc) + " (" + ($sender | oneline | esc) + ")") end) as $who
@@ -76,10 +77,11 @@ jobs:
                  elif $action == "ready_for_review" then 5809919
                  else 7239297 end) as $color
               | {
-                  username: $sender,
                   allowed_mentions: { parse: [] },
                   embeds: [
                     {
+                      author: ({ name: ($sender | oneline | esc) }
+                               + (if $sender_avatar == "" then {} else { icon_url: $sender_avatar } end)),
                       description: ($who + " " + $verb + " [#" + ($pr.number | tostring) + "](" + $pr.html_url + ") "
                                     + "[_" + ($pr.title | oneline | esc | .[0:220]) + "_](" + $pr.html_url + ")"
                                     + $tail + " in " + $repo),
@@ -88,7 +90,6 @@ jobs:
                     }
                   ]
                 }
-              | if $sender_avatar == "" then . else . + { avatar_url: $sender_avatar } end
               ')
 
           curl --fail-with-body --silent --show-error \
