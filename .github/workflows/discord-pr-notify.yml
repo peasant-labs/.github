@@ -1,8 +1,9 @@
 name: Notify Discord of pull requests
 
 # Reusable workflow: posts pull request events to the Discord channel behind
-# the DISCORD_WEBHOOK_URL secret. Callers run it from a pull_request_target
-# event and pass the secret with "secrets: inherit".
+# the DISCORD_WEBHOOK_URL secret. Messages appear under the actor's name and
+# avatar, in the style of a chat relay bot. Callers run it from a
+# pull_request_target event and pass the secret with "secrets: inherit".
 
 on:
   workflow_call:
@@ -10,7 +11,8 @@ on:
       DISCORD_WEBHOOK_URL:
         required: true
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   notify:
@@ -23,8 +25,9 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           EVENT_ACTION: ${{ github.event.action }}
           PR: ${{ toJSON(github.event.pull_request) }}
+          SENDER: ${{ toJSON(github.event.sender) }}
           REPOSITORY: ${{ github.repository }}
-          OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -33,52 +36,60 @@ jobs:
             exit 1
           fi
 
+          sender_login=$(jq -r '.login // empty' <<<"$SENDER")
+          sender_avatar=$(jq -r '.avatar_url // empty' <<<"$SENDER")
+
+          actor_name=""
+          if [ -n "$sender_login" ]; then
+            actor_name=$(curl -fsS --max-time 10 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/users/$sender_login" \
+              | jq -r '.name // empty') || actor_name=""
+          fi
+
           payload=$(jq -n \
             --arg action "$EVENT_ACTION" \
             --argjson pr "$PR" \
+            --arg sender "$sender_login" \
+            --arg sender_avatar "$sender_avatar" \
+            --arg name "$actor_name" \
             --arg repo "$REPOSITORY" \
-            --arg owner "$OWNER" \
             --arg now "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" '
+              def esc: gsub("_"; "\\_") | gsub("\\*"; "\\*") | gsub("`"; "\\`") | gsub("~"; "\\~") | gsub("\\|"; "\\|");
+              def oneline: gsub("[\n\r\t]+"; " ");
               ($pr.merged // false) as $merged
               | ($pr.draft // false) as $draft
-              | (if $action == "opened" and $draft then "opened as draft"
-                 elif $action == "opened" then "opened"
-                 elif $action == "reopened" then "reopened"
-                 elif $action == "ready_for_review" then "ready for review"
-                 elif $action == "closed" and $merged then "merged"
-                 elif $action == "closed" then "closed"
-                 else $action end) as $verb
+              | (if $action == "opened" and $draft then "opened draft pull request"
+                 elif $action == "opened" then "opened pull request"
+                 elif $action == "reopened" then "reopened pull request"
+                 elif $action == "ready_for_review" then "marked pull request"
+                 elif $action == "closed" and $merged then "merged pull request"
+                 elif $action == "closed" then "closed pull request"
+                 else ($action + " pull request") end) as $verb
+              | (if $action == "ready_for_review" then " as ready for review" else "" end) as $tail
+              | (if $name == "" then ($sender | oneline | esc)
+                 else (($name | oneline | esc) + " (" + ($sender | oneline | esc) + ")") end) as $who
               | (if $merged then 10711543
                  elif $action == "opened" then 3055683
                  elif $action == "reopened" then 13801762
                  elif $action == "ready_for_review" then 5809919
                  else 7239297 end) as $color
-              | (if ($action == "opened" or $action == "reopened" or $action == "ready_for_review") then
-                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
-                   + "\n+" + ($pr.additions | tostring) + " \u2212" + ($pr.deletions | tostring)
-                   + " \u00b7 " + ($pr.changed_files | tostring)
-                   + (if $pr.changed_files == 1 then " file changed" else " files changed" end)
-                 elif $merged then
-                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
-                   + "\nmerged by " + ($pr.merged_by.login // $pr.user.login)
-                 else
-                   "`" + $pr.base.ref + "` \u2190 `" + $pr.head.ref + "`"
-                 end) as $description
               | {
-                  username: $owner,
-                  avatar_url: ("https://github.com/" + $owner + ".png"),
+                  username: $sender,
                   allowed_mentions: { parse: [] },
                   embeds: [
-                    ({ author: ({ name: ("PR #" + ($pr.number | tostring) + " \u00b7 " + $verb) }
-                                + (if $pr.user.avatar_url then { icon_url: $pr.user.avatar_url } else {} end)),
-                       title: ($pr.title | .[0:250]),
-                       url: $pr.html_url,
-                       description: $description,
-                       color: $color,
-                       footer: { text: $repo },
-                       timestamp: $now })
+                    {
+                      description: ($who + " " + $verb + " [#" + ($pr.number | tostring) + "](" + $pr.html_url + ") "
+                                    + "[_" + ($pr.title | oneline | esc | .[0:220]) + "_](" + $pr.html_url + ")"
+                                    + $tail + " in " + $repo),
+                      color: $color,
+                      timestamp: $now
+                    }
                   ]
-                }')
+                }
+              | if $sender_avatar == "" then . else . + { avatar_url: $sender_avatar } end
+              ')
 
           curl --fail-with-body --silent --show-error \
             --retry 3 --retry-delay 2 \
