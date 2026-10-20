@@ -1,0 +1,51 @@
+name: Add epic to Peasant Labs Tracker
+
+# Reusable workflow: adds the triggering issue or pull request to the tracker
+# project when it carries the `epic` label. GitHub delivers events only to
+# workflows in the repository where the event happened, so every repository that
+# wants tracking keeps a short caller at .github/workflows/add-epic-to-project.yml
+# and delegates the work here.
+#
+# The project credential is an organization secret. When it is not visible to the
+# calling repository the job reports a notice and adds nothing, so callers can be
+# installed before the secret exists.
+
+on:
+  workflow_call:
+    secrets:
+      ADD_TO_PROJECT_PAT:
+        description: Organization token with Projects read & write.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  add:
+    # is:open — the action adds regardless of state, so the filter lives here.
+    if: >-
+      (github.event_name == 'issues' && github.event.issue.state == 'open') ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.state == 'open')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the project credential
+        id: credential
+        env:
+          TOKEN: ${{ secrets.ADD_TO_PROJECT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::notice::ADD_TO_PROJECT_PAT is not visible to this repository; skipping. See peasant-labs/.github/README.md."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add to project #4
+        if: steps.credential.outputs.available == 'true'
+        uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
+        with:
+          project-url: https://github.com/orgs/peasant-labs/projects/4
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
+          labeled: epic
