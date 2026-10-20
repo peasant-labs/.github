@@ -1,0 +1,31 @@
+name: Epic
+description: A multi-issue initiative, tracked on the Peasant Labs Tracker board.
+title: "[Epic] "
+labels: ["epic"]
+projects: ["peasant-labs/4"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Epics carry the *why* and the concept map; children are linked as sub-issues.
+
+        Prefix the title with the priority (`[P2][Epic] …`), and set **Size** and **Team**
+        on the board once the epic exists. Issues opened through this form are added to
+        Peasant Labs Tracker automatically.
+  - type: textarea
+    id: epic
+    attributes:
+      label: Epic
+      description: Why it exists, the concept map, children, definition of done, related epics.
+      value: |
+        ## Why
+
+        ## Concept map
+
+        ## Children
+
+        ## Definition of done
+
+        ## Related epics
+    validations:
+      required: true
