@@ -2,6 +2,11 @@
 
 Shared GitHub configuration for the `peasant-labs` organization.
 
+Shared CI and organization-wide automation live in
+[`peasant-labs/infra`](https://github.com/peasant-labs/infra). This repository
+keeps the Discord pull request notifier for now; new shared workflows should not
+be added here.
+
 ## Discord pull request notifications
 
 `.github/workflows/discord-pr-notify.yml` is a reusable workflow that posts pull request events to a Discord channel webhook.
